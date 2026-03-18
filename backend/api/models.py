@@ -96,6 +96,9 @@ class Branch(CodeNamed):
     phone = models.CharField(max_length=50, blank=True, default="")
     email = models.EmailField(blank=True, default="")
     
+    opening_balance = models.DecimalField(**DECIMAL_12_2, default=0)
+    opening_balance_date = models.DateField(null=True, blank=True, help_text="Date when the opening balance was set")
+
     class Meta:
         unique_together = [("business", "code")]
         indexes = [models.Index(fields=["business", "code"]), models.Index(fields=["business", "name"])]
@@ -1072,6 +1075,7 @@ class BankMovement(TimeStampedBy):
                 amount=self.amount,
                 description=f"Deposit to {self.to_bank}",
                 business=self.business,
+                branch=self.branch,
             )
             in_kwargs = dict(
                 date=self.date,
@@ -1080,6 +1084,7 @@ class BankMovement(TimeStampedBy):
                 amount=self.amount,
                 description="Cash deposit",
                 business=self.business,
+                branch=self.branch,
             )
 
         elif self.movement_type == self.CHEQUE_DEPOSIT:
@@ -1091,6 +1096,7 @@ class BankMovement(TimeStampedBy):
                 amount=self.amount,
                 description=self.notes or f"Cheque deposit to {self.to_bank}",
                 business=self.business,
+                branch=self.branch,
             )
 
         elif self.movement_type == self.WITHDRAW:
@@ -1101,6 +1107,7 @@ class BankMovement(TimeStampedBy):
                 amount=self.amount,
                 description="Cash withdrawal",
                 business=self.business,
+                branch=self.branch,
             )
             in_kwargs = dict(
                 date=self.date,
@@ -1109,6 +1116,7 @@ class BankMovement(TimeStampedBy):
                 amount=self.amount,
                 description=f"Withdraw from {self.from_bank}",
                 business=self.business,
+                branch=self.branch,
             )
 
         elif self.movement_type == self.TRANSFER:
@@ -1119,6 +1127,7 @@ class BankMovement(TimeStampedBy):
                 amount=self.amount,
                 description=f"Transfer to {self.to_bank}",
                 business=self.business,
+                branch=self.branch,
             )
             in_kwargs = dict(
                 date=self.date,
@@ -1127,6 +1136,7 @@ class BankMovement(TimeStampedBy):
                 amount=self.amount,
                 description=f"Transfer from {self.from_bank}",
                 business=self.business,
+                branch=self.branch,
             )
 
         elif self.movement_type == self.FEE:
@@ -1137,6 +1147,7 @@ class BankMovement(TimeStampedBy):
                 amount=self.amount,
                 description="Bank fee",
                 business=self.business,
+                branch=self.branch,
             )
 
         elif self.movement_type == self.INTEREST:
@@ -1147,6 +1158,7 @@ class BankMovement(TimeStampedBy):
                 amount=self.amount,
                 description="Bank interest",
                 business=self.business,
+                branch=self.branch,
             )
 
         elif self.movement_type == self.CHEQUE_PAYMENT:
@@ -1162,6 +1174,7 @@ class BankMovement(TimeStampedBy):
                 amount=self.amount,
                 description=desc,
                 business=self.business,
+                branch=self.branch,
             )
 
         # Upsert OUT
@@ -1174,6 +1187,7 @@ class BankMovement(TimeStampedBy):
                 cf.amount = out_kwargs["amount"]
                 cf.description = out_kwargs["description"]
                 cf.business = out_kwargs.get("business")
+                cf.branch = out_kwargs.get("branch")
                 cf.updated_by = self.updated_by
                 cf.save(
                     update_fields=[
@@ -1208,6 +1222,7 @@ class BankMovement(TimeStampedBy):
                 cf.amount = in_kwargs["amount"]
                 cf.description = in_kwargs["description"]
                 cf.business = in_kwargs.get("business")
+                cf.branch = in_kwargs.get("branch")
                 cf.updated_by = self.updated_by
                 cf.save(
                     update_fields=[
@@ -1217,6 +1232,7 @@ class BankMovement(TimeStampedBy):
                         "amount",
                         "description",
                         "business",
+                        "branch",
                         "updated_at",
                         "updated_by",
                     ]
@@ -1277,10 +1293,11 @@ class StockTransaction(TimeStampedBy):
 # --------------------------------
 # Purchase Orders (+ bridge payments)
 # --------------------------------
-class PurchaseOrder(models.Model):
+class PurchaseOrder(TimeStampedBy):
     STATUS_CHOICES = [
         ("pending", "Pending"),
         ("received", "Received"),
+        ("cancelled", "Cancelled"),
     ]
 
     business   = models.ForeignKey(
@@ -1304,6 +1321,7 @@ class PurchaseOrder(models.Model):
         choices=STATUS_CHOICES,
         default="pending",
     )
+    date       = models.DateField(default=timezone.now, db_index=True)
 
     # optional warehouse for this PO
     warehouse  = models.ForeignKey(
@@ -1319,25 +1337,7 @@ class PurchaseOrder(models.Model):
     tax_percent      = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("0.00"))
     discount_percent = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("0.00"))
     net_total        = models.DecimalField(**DECIMAL_12_2, default=Decimal("0.00"))
-
-    # metadata
-    notes      = models.CharField(max_length=255, blank=True, default="")
-    created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
-        related_name="po_created",
-    )
-    updated_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
-        related_name="po_updated",
-    )
-    created_at = models.DateTimeField(default=timezone.now)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    is_active  = models.BooleanField(default=True, db_index=True)
-    is_deleted = models.BooleanField(default=False, db_index=True)
-
+    notes            = models.CharField(max_length=255, blank=True, default="")
     branch_display_index = models.PositiveIntegerField(null=True, blank=True)
 
     class Meta:
@@ -1471,6 +1471,7 @@ class PurchaseOrderItem(models.Model):
         max_digits=12, decimal_places=2, null=True, blank=True,
         help_text="Sale price for this item (in the unit selected). Will be converted to lower unit if bulk unit is used."
     )
+    expiry_date = models.DateField(null=True, blank=True)
 
     class Meta:
         ordering = ["id"]
@@ -1508,16 +1509,18 @@ class PurchaseOrderItem(models.Model):
     def delete(self, *args, **kwargs):
         super().delete(*args, **kwargs)
 
-class PurchaseReturn(models.Model):
+class PurchaseReturn(TimeStampedBy):
     STATUS_CHOICES = [
         ("pending", "Pending"),
         ("processed", "Processed"),
+        ("cancelled", "Cancelled"),
     ]
 
     business   = models.ForeignKey(Business, on_delete=models.PROTECT, related_name="purchase_returns")
     branch     = models.ForeignKey("Branch", on_delete=models.PROTECT, related_name="purchase_returns", null=True, blank=True)
     supplier   = models.ForeignKey(Party, on_delete=models.PROTECT, related_name="purchase_returns")
     status     = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    date       = models.DateField(default=timezone.now, db_index=True)
 
     # money
     total_cost       = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))  # subtotal
@@ -1525,15 +1528,7 @@ class PurchaseReturn(models.Model):
     discount_percent = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("0.00"))
     net_total        = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
 
-    # meta
     notes      = models.CharField(max_length=255, blank=True, default="")
-    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="pr_created")
-    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="pr_updated")
-    created_at = models.DateTimeField(default=timezone.now)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    is_active  = models.BooleanField(default=True, db_index=True)
-    is_deleted = models.BooleanField(default=False, db_index=True)
 
     class Meta:
         ordering = ["-created_at", "-id"]
@@ -1611,70 +1606,12 @@ class PurchaseReturnItem(models.Model):
     def __str__(self):
         return f"{self.quantity or 0} x {getattr(self.product, 'name', '—')}"
 
-    # -------- STOCK ADJUSTMENT HELPERS (for returns) --------
-    def _is_processed(self) -> bool:
-        try:
-            return (self.purchase_return.status or "").lower() == "processed"
-        except Exception:
-            return False
-
-    @staticmethod
-    def _add_stock(product_id, delta: Decimal):
-        if not delta:
-            return
-        (Product.objects
-         .select_for_update()
-         .filter(pk=product_id)
-         .update(stock_qty=F("stock_qty") + delta))
-
     @transaction.atomic
     def save(self, *args, **kwargs):
-        creating = self.pk is None
-        old_product_id = None
-        old_qty = Decimal("0")
-
-        if not creating:
-            prev = (PurchaseReturnItem.objects
-                    .select_for_update()
-                    .only("product_id", "quantity")
-                    .get(pk=self.pk))
-            old_product_id = prev.product_id
-            old_qty = prev.quantity or Decimal("0")
-
         super().save(*args, **kwargs)
-
-        # Adjust stock only when the return is processed
-        if not self._is_processed():
-            return
-
-        new_product_id = self.product_id
-        new_qty = self.quantity or Decimal("0")
-
-        if creating:
-            # returning to supplier → stock OUT
-            self._add_stock(new_product_id, -new_qty)
-        else:
-            if old_product_id != new_product_id:
-                if old_product_id:
-                    self._add_stock(old_product_id, +old_qty)   # undo previous OUT
-                if new_product_id:
-                    self._add_stock(new_product_id, -new_qty)   # apply new OUT
-            else:
-                delta = new_qty - old_qty
-                if delta:
-                    # increase returned qty → subtract more; decrease → add back
-                    self._add_stock(new_product_id, -delta)
 
     @transaction.atomic
     def delete(self, *args, **kwargs):
-        # Deleting an already-processed return item should add stock back
-        if self._is_processed():
-            qty = self.quantity or Decimal("0")
-            if qty and self.product_id:
-                (Product.objects
-                 .select_for_update()
-                 .filter(pk=self.product_id)
-                 .update(stock_qty=F("stock_qty") + qty))
         super().delete(*args, **kwargs)
 
 class PurchaseReturnRefund(TimeStampedBy):
@@ -2306,6 +2243,7 @@ class SalesOrder(TimeStampedBy):
     branch     = models.ForeignKey("Branch", on_delete=models.PROTECT, related_name="sales_orders", null=True, blank=True)
     customer   = models.ForeignKey(Party, on_delete=models.PROTECT, null=True, blank=True, related_name="sales_orders")
     status     = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
+    date       = models.DateField(default=timezone.now, db_index=True)
 
     # For walk-ins or when customer is not registered
     customer_name    = models.CharField(max_length=255, blank=True, default="")
@@ -2460,6 +2398,7 @@ class SalesInvoice(TimeStampedBy):
     business = models.ForeignKey(Business, on_delete=models.PROTECT, related_name="sales_invoices")
     branch   = models.ForeignKey("Branch", on_delete=models.PROTECT, related_name="sales_invoices", null=True, blank=True)
     customer = models.ForeignKey(Party, on_delete=models.PROTECT, null=True, blank=True, related_name="sales_invoices")
+    date     = models.DateField(default=timezone.now, db_index=True)
 
     # Anonymous customer fields (for unregistered customers)
     customer_name    = models.CharField(max_length=255, blank=True, default="")
@@ -2657,6 +2596,7 @@ class SalesReturn(TimeStampedBy):
     class Status(models.TextChoices):
         PENDING   = "pending",   "Pending"
         PROCESSED = "processed", "Processed"
+        CANCELLED = "cancelled", "Cancelled"
 
     business = models.ForeignKey(Business, on_delete=models.PROTECT, related_name="sales_returns")
     branch   = models.ForeignKey("Branch", on_delete=models.PROTECT, related_name="sales_returns", null=True, blank=True)
@@ -2665,6 +2605,7 @@ class SalesReturn(TimeStampedBy):
     source_invoice = models.ForeignKey("SalesInvoice", on_delete=models.SET_NULL, null=True, blank=True, related_name="returns")
     # Link to original sales order (primary way to create returns)
     source_order = models.ForeignKey("SalesOrder", on_delete=models.SET_NULL, null=True, blank=True, related_name="returns")
+    date = models.DateField(default=timezone.now, db_index=True)
 
     # anonymous customer (if no Party)
     customer_name    = models.CharField(max_length=255, blank=True, default="")
@@ -2923,13 +2864,16 @@ class Warehouse(TimeStampedBy):
     """
     Physical storage that can hold products from any business.
     """
-    name      = models.CharField(max_length=200, unique=True)
-    code      = models.CharField(max_length=50, unique=True)
+    business = models.ForeignKey("Business", on_delete=models.CASCADE, related_name="warehouses")
+    branch = models.ForeignKey("Branch", on_delete=models.CASCADE, related_name="warehouses", null=True, blank=True)
+    name      = models.CharField(max_length=200)
+    code      = models.CharField(max_length=50)
     address   = models.CharField(max_length=255, blank=True, default="")
     is_active = models.BooleanField(default=True)
 
     class Meta:
         ordering = ["name", "id"]
+        unique_together = [("business", "code"), ("business", "name")]
 
     def __str__(self):
         return f"{self.code} — {self.name}"
@@ -2981,16 +2925,16 @@ class StockMove(TimeStampedBy):
     source_warehouse = models.ForeignKey(
         Warehouse, on_delete=models.PROTECT, null=True, blank=True, related_name="out_moves"
     )
-    source_business  = models.ForeignKey(
-        "Business", on_delete=models.PROTECT, null=True, blank=True, related_name="out_moves"
+    source_branch  = models.ForeignKey(
+        "Branch", on_delete=models.PROTECT, null=True, blank=True, related_name="out_moves"
     )
 
     # Destination
     dest_warehouse = models.ForeignKey(
         Warehouse, on_delete=models.PROTECT, null=True, blank=True, related_name="in_moves"
     )
-    dest_business  = models.ForeignKey(
-        "Business", on_delete=models.PROTECT, null=True, blank=True, related_name="in_moves"
+    dest_branch  = models.ForeignKey(
+        "Branch", on_delete=models.PROTECT, null=True, blank=True, related_name="in_moves"
     )
 
     quantity = models.DecimalField(**DECIMAL_18_6, validators=[MinValueValidator(Decimal("0.000001"))])
@@ -3012,12 +2956,12 @@ class StockMove(TimeStampedBy):
     # ---- helpers
 
     def _one_source_one_dest(self):
-        src = [self.source_warehouse, self.source_business]
-        dst = [self.dest_warehouse, self.dest_business]
+        src = [self.source_warehouse, self.source_branch]
+        dst = [self.dest_warehouse, self.dest_branch]
         if sum(1 for x in src if x) != 1 or sum(1 for x in dst if x) != 1:
             raise ValidationError("Provide exactly one source and one destination.")
 
-    def _stock_row(self, *, warehouse=None, business=None):
+    def _stock_row(self, *, warehouse=None, branch=None):
         """
         Fetch or create the correct stock row for a product for the given location.
         """
@@ -3027,12 +2971,10 @@ class StockMove(TimeStampedBy):
                 defaults={"quantity": Decimal("0")}
             )
             return obj
-        if business:
-            obj, _ = BusinessStock.objects.get_or_create(
-                business=business, product=self.product,
-                defaults={"quantity": Decimal("0")}
-            )
-            return obj
+        if branch:
+            # We don't have BranchStock, we just modify Product.stock_qty for the branch
+            # We will handle it differently in post()
+            return None
         raise ValidationError("Invalid stock location.")
 
     def clean(self):
@@ -3042,23 +2984,25 @@ class StockMove(TimeStampedBy):
             raise ValidationError("Quantity must be positive.")
 
         # Business <-> Warehouse must respect product.business
-        # product.business must match the side that is a Business.
         prod_business_id = getattr(self.product, "business_id", None)
 
-        if self.source_business and self.source_business_id != prod_business_id:
-            raise ValidationError("Product's business must match source business.")
-        if self.dest_business and self.dest_business_id != prod_business_id:
-            raise ValidationError("Product's business must match destination business.")
+        if self.source_branch and getattr(self.source_branch, "business_id", None) != prod_business_id:
+            raise ValidationError("Product's business must match source branch's business.")
+        if self.dest_branch and getattr(self.dest_branch, "business_id", None) != prod_business_id:
+            raise ValidationError("Product's business must match destination branch's business.")
+        
+        if self.source_warehouse and getattr(self.source_warehouse, "business_id", None) != prod_business_id:
+            raise ValidationError("Product's business must match source warehouse's business.")
+        if self.dest_warehouse and getattr(self.dest_warehouse, "business_id", None) != prod_business_id:
+            raise ValidationError("Product's business must match destination warehouse's business.")
 
         # No same-to-same
         if self.source_warehouse_id and self.dest_warehouse_id and self.source_warehouse_id == self.dest_warehouse_id:
             raise ValidationError("Source and destination warehouse cannot be the same.")
-        if self.source_business_id and self.dest_business_id and self.source_business_id == self.dest_business_id:
-            raise ValidationError("Source and destination business cannot be the same.")
+        if self.source_branch_id and self.dest_branch_id and self.source_branch_id == self.dest_branch_id:
+            raise ValidationError("Source and destination branch cannot be the same.")
 
-        # If posting now, make sure source has enough
         if self.status == self.Status.POSTED and self.pk:
-            # Skip for now; we validate again in post()
             pass
 
     @transaction.atomic
@@ -3068,46 +3012,66 @@ class StockMove(TimeStampedBy):
 
         self.full_clean()
 
-        # Ensure PK exists before side-effects
         if not self.pk:
             super().save()
 
-        # Source stock row
+        # Update Warehouse Stocks
         if self.source_warehouse_id:
             src = self._stock_row(warehouse=self.source_warehouse)
-        else:
-            src = self._stock_row(business=self.source_business)
+            if src.quantity < self.quantity:
+                raise ValidationError("Insufficient source warehouse stock.")
+            src.quantity = (src.quantity or Decimal("0")) - self.quantity
+            src.full_clean()
+            src.save(update_fields=["quantity", "updated_at"])
+            
+            StockTransaction.objects.create(
+                business=self.product.business,
+                branch=self.dest_branch if self.dest_branch else self.product.branch, # if moving WH to WH, just log to prod branch
+                date=timezone.now().date(),
+                movement='in',
+                product=self.product,
+                uom=self.product.uom,
+                quantity=self.quantity,
+                reference=self.reference or f'Transfer from {self.source_warehouse.name}',
+                notes=f'Move {self.pk}',
+                created_by=user or getattr(self, "updated_by", None)
+            )
 
-        if src.quantity < self.quantity:
-            raise ValidationError("Insufficient source stock to post this move.")
-
-        # Destination stock row
         if self.dest_warehouse_id:
             dst = self._stock_row(warehouse=self.dest_warehouse)
-        else:
-            dst = self._stock_row(business=self.dest_business)
+            dst.quantity = (dst.quantity or Decimal("0")) + self.quantity
+            dst.full_clean()
+            dst.save(update_fields=["quantity", "updated_at"])
+            
+            StockTransaction.objects.create(
+                business=self.product.business,
+                branch=self.source_branch if self.source_branch else self.product.branch, # log out from source
+                date=timezone.now().date(),
+                movement='out',
+                product=self.product,
+                uom=self.product.uom,
+                quantity=self.quantity,
+                reference=self.reference or f'Transfer to {self.dest_warehouse.name}',
+                notes=f'Move {self.pk}',
+                created_by=user or getattr(self, "updated_by", None)
+            )
 
-        # Apply row-level quantities
-        src.quantity = (src.quantity or Decimal("0")) - self.quantity
-        dst.quantity = (dst.quantity or Decimal("0")) + self.quantity
-        src.full_clean(); dst.full_clean()
-        src.save(update_fields=["quantity", "updated_at"])
-        dst.save(update_fields=["quantity", "updated_at"])
-
-        # >>> NEW: reflect on Product.stock_qty when a Business is involved <<<
-        # - WH -> Business: add to product.stock_qty
-        # - Business -> WH: subtract from product.stock_qty (when you enable that direction)
+        # Update Product Master Stock for Branch moves
         delta = Decimal("0")
-        if self.dest_business_id:
+        if self.dest_branch_id:
             delta += self.quantity
-        if self.source_business_id:
+        if self.source_branch_id:
+            # We don't strictly prevent negative master stock here as it's allowed in POS, 
+            # but ideally we should check if needed.
             delta -= self.quantity
+            
         if delta:
-            (Product.objects
-             .select_for_update()
-             .filter(pk=self.product_id)
-             .update(stock_qty=F("stock_qty") + delta))
-        # <<< END NEW >>>
+            locked_product = Product.objects.select_for_update().get(pk=self.product_id)
+            if self.source_branch_id and locked_product.stock_qty < self.quantity:
+                raise ValidationError(f"Insufficient branch stock. Current: {locked_product.stock_qty}")
+            locked_product.stock_qty += delta
+            locked_product.save(update_fields=['stock_qty'])
+
 
         self.status = self.Status.POSTED
         self.posted_at = timezone.now()
@@ -3239,3 +3203,41 @@ class ActivityLog(models.Model):
         if self.branch and not self.branch_name:
             self.branch_name = self.branch.name
         super().save(*args, **kwargs)
+
+
+class BusinessSubscriptionPayment(TimeStampedBy):
+    """
+    Records actual payments made by businesses for setup fees or monthly subscriptions.
+    """
+    TYPE_SETUP = 'setup'
+    TYPE_MONTHLY = 'monthly'
+    PAYMENT_TYPES = [
+        (TYPE_SETUP, 'Setup Fee'),
+        (TYPE_MONTHLY, 'Monthly Subscription'),
+    ]
+
+    business = models.ForeignKey(
+        Business, 
+        on_delete=models.CASCADE, 
+        related_name="subscription_payments"
+    )
+    amount = models.DecimalField(**DECIMAL_12_2)
+    payment_date = models.DateField(default=timezone.now)
+    
+    # For monthly: YYYY-MM (e.g., '2026-03'). For setup: null.
+    subscription_month = models.CharField(max_length=7, null=True, blank=True, db_index=True)
+    
+    payment_type = models.CharField(max_length=10, choices=PAYMENT_TYPES, default=TYPE_MONTHLY)
+    notes = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-payment_date", "-id"]
+        indexes = [
+            models.Index(fields=["business", "payment_type"]),
+            models.Index(fields=["business", "subscription_month"]),
+        ]
+        # Prevent duplicate payments for the same business, month, and type
+        unique_together = [("business", "subscription_month", "payment_type")]
+
+    def __str__(self):
+        return f"{self.business.code} - {self.get_payment_type_display()} - {self.subscription_month or 'Setup'}"
